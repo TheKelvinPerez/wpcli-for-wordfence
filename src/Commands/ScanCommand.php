@@ -336,15 +336,26 @@ class ScanCommand
                 );
             }
 
+            $runningLabel = $status['running'] ? WP_CLI::colorize('%GRunning%n') : WP_CLI::colorize('%RNot running%n');
+            if (!empty($status['stalled'])) {
+                $runningLabel = WP_CLI::colorize('%RSTALLED%n');
+            }
+
             $headerLine = sprintf(
                 '[%s] %s | Stage: %s%s | Elapsed: %s',
                 date('H:i:s'),
-                $status['running'] ? WP_CLI::colorize('%GRunning%n') : WP_CLI::colorize('%RNot running%n'),
+                $runningLabel,
                 $stageText,
                 $overallText,
                 gmdate('H:i:s', $elapsed)
             );
             WP_CLI::log($headerLine);
+
+            // --- Stall warning ---
+            if (!empty($status['stalled'])) {
+                WP_CLI::log(WP_CLI::colorize('  %R⚠ Scan appears stalled — no progress since ' . $status['stalled_since'] . '%n'));
+                WP_CLI::log(WP_CLI::colorize('  %RTry: wp wfsec scan stop && wp wfsec scan start --type=full%n'));
+            }
 
             // --- Stage pipeline (visual progress bar) ---
             if (!empty($status['stage_details'])) {
@@ -451,6 +462,6 @@ class ScanCommand
             }
         }
 
-        return implode('  ', $parts);
+        return implode('  |  ', $parts);
     }
 }

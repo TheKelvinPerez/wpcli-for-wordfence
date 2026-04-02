@@ -294,6 +294,7 @@ class WordfenceService
         // Determine current stage and overall progress from stage statuses
         $currentStage = 'N/A';
         $currentStageProgress = '';
+        $runningStages = [];
         $overallProgress = 0;
         $stagesComplete = 0;
         $stagesTotal = 0;
@@ -326,11 +327,15 @@ class WordfenceService
                         'expected' => $expected,
                     ];
                 } elseif (in_array($status, ['running', 'running-warning'], true)) {
-                    $currentStage = $humanName;
                     $pct = $expected > 0 ? round(($finished / $expected) * 100) : 0;
-                    $currentStageProgress = $expected > 0
+                    $progressText = $expected > 0
                         ? sprintf('%d/%d (%d%%)', $finished, $expected, $pct)
                         : 'in progress';
+                    $runningStages[] = [
+                        'name'     => $humanName,
+                        'progress' => $progressText,
+                        'pct'      => $pct,
+                    ];
                     $stageDetails[$key] = [
                         'name'     => $humanName,
                         'status'   => $status,
@@ -352,6 +357,16 @@ class WordfenceService
             if ($stagesTotal > 0) {
                 $overallProgress = round(($stagesComplete / $stagesTotal) * 100);
             }
+
+            // Build current stage display from all running stages
+            if (!empty($runningStages)) {
+                $parts = [];
+                foreach ($runningStages as $rs) {
+                    $parts[] = $rs['name'] . ' ' . $rs['progress'];
+                }
+                $currentStage = implode(' | ', $parts);
+                $currentStageProgress = '';
+            }
         }
 
         // Fallback: if no stage statuses available, try the legacy keys
@@ -362,14 +377,24 @@ class WordfenceService
             }
         }
 
+        // Stall detection: if summary lastUpdate is older than 5 minutes, scan is likely stalled
+        $stalled = false;
+        $lastUpdate = (int) ($summaryItems['lastUpdate'] ?? 0);
+        if ($running && $lastUpdate > 0 && (time() - $lastUpdate) > 300) {
+            $stalled = true;
+        }
+
         // Get last scan info from wfStatus table
         $lastScanInfo = self::getLastScanInfo();
         $lastScan = $lastScanInfo['timestamp'] ?? 0;
 
         return [
             'running'              => (bool) $running,
+            'stalled'              => $stalled,
+            'stalled_since'        => $stalled ? date('Y-m-d H:i:s', $lastUpdate) : null,
             'stage'                => $currentStage,
             'stage_progress'       => $currentStageProgress,
+            'running_stages'       => $runningStages,
             'overall_progress'     => $overallProgress,
             'stages_complete'      => $stagesComplete,
             'stages_total'         => $stagesTotal,
