@@ -257,11 +257,63 @@ class WordfenceService
     ];
 
     /**
+     * Read a value directly from the wfConfig DB table, bypassing all caches.
+     *
+     * wfConfig::get() and get_ser() use WordPress object cache and an internal
+     * static cache. In a long-running CLI process (like `watch`), these caches
+     * go stale — the data only refreshes when the process restarts.
+     * This method queries the database directly every time.
+     *
+     * @param string $key     The wfConfig key to read.
+     * @param mixed  $default Default value if the key doesn't exist.
+     * @return mixed The raw value from the database, or $default.
+     */
+    public static function getConfigDirect(string $key, $default = null)
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'wfConfig';
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) !== $table) {
+            // Fallback: some installs use wfconfig (lowercase)
+            $table = $wpdb->prefix . 'wfconfig';
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) !== $table) {
+                return $default;
+            }
+        }
+
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+        $val = $wpdb->get_var($wpdb->prepare(
+            "SELECT val FROM {$table} WHERE name = %s LIMIT 1",
+            $key
+        ));
+
+        return $val !== null ? $val : $default;
+    }
+
+    /**
+     * Read a serialized value directly from the wfConfig DB table.
+     */
+    public static function getConfigDirectSerialized(string $key, $default = [])
+    {
+        $raw = self::getConfigDirect($key, null);
+        if ($raw === null) {
+            return $default;
+        }
+        $result = @unserialize($raw);
+        return is_array($result) ? $result : $default;
+    }
+
+    /**
      * Get scan status with real-time stage progress from Wordfence internals.
      *
      * Reads scanStageStatuses (serialized array in wfConfig) which contains
      * per-stage status, started/finished/expected counts — the same data
      * the Wordfence admin panel uses for its progress display.
+     *
+     * All reads bypass WordPress/wfConfig caches via direct DB queries so
+     * that long-running CLI processes (like `watch`) see fresh data.
      */
     public static function getScanStatus(): array
     {
@@ -269,27 +321,15 @@ class WordfenceService
             return ['running' => false, 'stage' => 'unknown'];
         }
 
-        // Check if scan is running via config
-        $scanRunning = (int) \wfConfig::get('wf_scanRunning', 0);
+        // Read directly from DB — bypasses wfConfig's static cache
+        $scanRunning = (int) self::getConfigDirect('wf_scanRunning', 0);
         $running = $scanRunning && (time() - $scanRunning < 86400);
 
-        // Read the real stage statuses — this is what the admin panel uses
-        $stageStatuses = [];
-        if (method_exists('wfConfig', 'get_ser')) {
-            $stageStatuses = \wfConfig::get_ser('scanStageStatuses', []);
-        }
-        if (!is_array($stageStatuses)) {
-            $stageStatuses = [];
-        }
+        // Read the real stage statuses directly from DB
+        $stageStatuses = self::getConfigDirectSerialized('scanStageStatuses', []);
 
-        // Read live summary counters (files scanned, posts, etc.)
-        $summaryItems = [];
-        if (method_exists('wfConfig', 'get_ser')) {
-            $summaryItems = \wfConfig::get_ser('wf_summaryItems', []);
-        }
-        if (!is_array($summaryItems)) {
-            $summaryItems = [];
-        }
+        // Read live summary counters directly from DB
+        $summaryItems = self::getConfigDirectSerialized('wf_summaryItems', []);
 
         // Determine current stage and overall progress from stage statuses
         $currentStage = 'N/A';
